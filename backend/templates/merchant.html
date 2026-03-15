@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>InstaPay — Merchant Stall POS</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@600;700;800;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#ffffff;--surface:#fdf4ff;--card:#fff8f0;--border:#e8d5f5;
+      --green:#16a34a;--green2:#15803d;--orange:#f97316;--orange2:#fb923c;
+      --red:#dc2626;--blue:#7c3aed;--purple:#7c3aed;
+      --text:#1a0a2e;--muted:#7c5a9e;--subtle:#f5e6ff;
+    }
+    html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;overflow:hidden}
+
+    /* ── LAYOUT ── */
+    .layout{display:grid;grid-template-columns:300px 1fr;height:100vh}
+
+    /* ── LEFT PANEL ── */
+    .left-panel{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px;gap:16px;overflow-y:auto}
+    .left-panel::-webkit-scrollbar{width:2px}
+    .left-panel::-webkit-scrollbar-thumb{background:var(--border)}
+    .logo-bar{text-align:center;border-bottom:1px solid var(--border);padding-bottom:14px}
+    .logo-bar h1{font-family:'Barlow Condensed',sans-serif;font-size:1.6rem;font-weight:900;letter-spacing:2px;text-transform:uppercase}
+    .logo-bar h1 span{color:var(--orange)}
+    .logo-bar p{font-family:'JetBrains Mono',monospace;font-size:.55rem;color:var(--muted);letter-spacing:2px;margin-top:2px}
+
+    /* ── STALL SELECTOR ── */
+    .stall-bar{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+    .stall-btn{padding:6px 16px;background:var(--card);border:1px solid var(--border);border-radius:8px;
+      font-family:'Barlow Condensed',sans-serif;font-size:.88rem;font-weight:800;letter-spacing:1px;
+      text-transform:uppercase;color:var(--muted);cursor:pointer;transition:all .15s}
+    .stall-btn.active{background:rgba(249,115,22,.15);border-color:var(--orange);color:var(--orange)}
+    .stall-btn:hover:not(.active){border-color:var(--muted)}
+
+    /* ── LCD ── */
+    .lcd-wrap{background:#f0fff0;border:2px solid #16a34a;border-radius:12px;padding:14px;
+      font-family:'JetBrains Mono',monospace;min-height:80px;position:relative;
+      box-shadow:0 0 20px rgba(22,163,74,.08) inset,0 2px 12px rgba(22,163,74,.1)}
+    .lcd-wrap::before{content:'LCD';position:absolute;top:-9px;left:12px;
+      font-size:.5rem;color:#16a34a;background:#f0fff0;padding:0 5px;letter-spacing:2px}
+    .lcd-line1{font-size:.8rem;color:#15803d;letter-spacing:.5px;min-height:22px;line-height:1.5}
+    .lcd-line2{font-size:.8rem;color:#16a34a;letter-spacing:.5px;min-height:22px;margin-top:6px;line-height:1.5}
+    .lcd-cursor{display:inline-block;width:8px;height:14px;background:#16a34a;vertical-align:middle;animation:blink .7s step-end infinite;margin-left:2px}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+    /* ── ARDUINO STATUS ── */
+    .ard-status-bar{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:8px}
+    .ard-dot{width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;transition:background .3s}
+    .ard-dot.on{background:#22c55e;box-shadow:0 0 6px #22c55e}
+    .ard-label{font-family:'JetBrains Mono',monospace;font-size:.62rem;color:var(--muted)}
+
+    /* ── RFID INFO CARD ── */
+    .rfid-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;display:none}
+    .rfid-card.visible{display:block}
+    .rfid-card-title{font-family:'JetBrains Mono',monospace;font-size:.52rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
+    .rfid-name{font-family:'Barlow Condensed',sans-serif;font-size:1.3rem;font-weight:900;color:var(--text);margin-bottom:3px}
+    .rfid-uid{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--orange);margin-bottom:8px}
+    .rfid-bal{font-family:'JetBrains Mono',monospace;font-size:1rem;color:var(--green);font-weight:600}
+    .rfid-bal span{font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px}
+
+    /* ── RIGHT PANEL ── */
+    .right-panel{display:flex;flex-direction:column;overflow:hidden}
+
+    /* ── TABS ── */
+    .tab-bar{display:flex;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+    .tab-btn{padding:13px 22px;font-family:'Barlow Condensed',sans-serif;font-size:.82rem;font-weight:800;
+      letter-spacing:1px;text-transform:uppercase;color:var(--muted);cursor:pointer;border:none;
+      background:none;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap}
+    .tab-btn:hover{color:var(--text)}
+    .tab-btn.active{color:var(--orange);border-bottom-color:var(--orange)}
+    .tab-content{flex:1;overflow:hidden;display:flex;flex-direction:column}
+    .tab-pane{display:none;flex:1;flex-direction:column;overflow:hidden}
+    .tab-pane.active{display:flex}
+
+    /* ── POS TAB ── */
+    .topbar{padding:14px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface);flex-shrink:0}
+    .topbar-left h2{font-family:'Barlow Condensed',sans-serif;font-size:1.05rem;font-weight:800;text-transform:uppercase;letter-spacing:1px}
+    .tag{font-family:'JetBrains Mono',monospace;font-size:.58rem;padding:3px 9px;border-radius:20px}
+    .tag.green{background:rgba(34,197,94,.1);color:var(--green);border:1px solid rgba(34,197,94,.25)}
+    .tag.orange{background:rgba(249,115,22,.1);color:var(--orange);border:1px solid rgba(249,115,22,.25)}
+    .tag.red{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.25)}
+
+    /* ── MENU PANEL ── */
+    .menu-panel{flex:1;padding:16px 20px;overflow-y:auto}
+    .menu-panel::-webkit-scrollbar{width:3px}
+    .menu-panel::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+    .sec-title{font-family:'Barlow Condensed',sans-serif;font-size:.72rem;font-weight:800;
+      letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;
+      display:flex;align-items:center;gap:8px}
+    .sec-title::after{content:'';flex:1;height:1px;background:var(--border)}
+    .menu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+    .menu-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;cursor:pointer;transition:all .15s;position:relative}
+    .menu-card:hover{border-color:var(--green);background:rgba(34,197,94,.04)}
+    .menu-card:active{transform:scale(.98)}
+    .mc-code{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--orange);margin-bottom:4px;letter-spacing:1px}
+    .mc-name{font-size:.84rem;font-weight:700;margin-bottom:4px}
+    .mc-price{font-family:'JetBrains Mono',monospace;font-size:.9rem;color:var(--green);font-weight:600}
+    .mc-del{position:absolute;top:6px;right:7px;font-size:.6rem;color:var(--muted);cursor:pointer;background:none;border:none;transition:color .15s;padding:2px}
+    .mc-del:hover{color:var(--red)}
+
+    /* ── HISTORY TAB ── */
+    .hist-topbar{padding:14px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface);flex-shrink:0;flex-wrap:wrap;gap:10px}
+    .hist-topbar h2{font-family:'Barlow Condensed',sans-serif;font-size:1.05rem;font-weight:800;text-transform:uppercase;letter-spacing:1px}
+    .hist-topbar h2 span{color:var(--orange)}
+    .hist-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 22px;flex-shrink:0}
+    .hstat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+    .hstat-label{font-family:'JetBrains Mono',monospace;font-size:.54rem;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}
+    .hstat-val{font-family:'Barlow Condensed',sans-serif;font-size:1.5rem;font-weight:900}
+    .hstat-val.green{color:var(--green)} .hstat-val.orange{color:var(--orange)}
+    .hist-split{flex:1;display:grid;grid-template-columns:1fr 270px;overflow:hidden}
+    .sales-section{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border)}
+    .sales-header{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap}
+    .sales-header h3{font-family:'Barlow Condensed',sans-serif;font-size:.82rem;font-weight:800;text-transform:uppercase;letter-spacing:1px;flex:1}
+    .search-wrap{display:flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:4px 9px}
+    .search-wrap:focus-within{border-color:var(--orange)}
+    .search-wrap svg{width:11px;height:11px;color:var(--muted);flex-shrink:0}
+    .search-wrap input{background:none;border:none;outline:none;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.68rem;width:130px}
+    .search-wrap input::placeholder{color:var(--muted)}
+    .sales-scroll{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+    .sales-scroll::-webkit-scrollbar{width:3px}
+    .sales-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+    table{width:100%;border-collapse:collapse}
+    thead tr{position:sticky;top:0;z-index:2}
+    th{font-family:'JetBrains Mono',monospace;font-size:.52rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;padding:8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--card);white-space:nowrap}
+    td{padding:8px 14px;font-size:.76rem;border-bottom:1px solid rgba(0,0,0,.04);white-space:nowrap}
+    tr:last-child td{border-bottom:none}
+    tr:hover td{background:rgba(249,115,22,.03)}
+    td.mono{font-family:'JetBrains Mono',monospace;font-size:.68rem}
+    .no-rec{padding:28px;text-align:center;color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:.7rem}
+    .cust-section{display:flex;flex-direction:column;overflow:hidden;background:var(--subtle)}
+    .cust-head{padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
+    .cust-head h3{font-family:'Barlow Condensed',sans-serif;font-size:.82rem;font-weight:800;text-transform:uppercase;letter-spacing:1px}
+    .cust-head p{font-family:'JetBrains Mono',monospace;font-size:.54rem;color:var(--muted);margin-top:2px}
+    .cust-scroll{flex:1;overflow-y:auto;padding:8px 12px;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+    .cust-scroll::-webkit-scrollbar{width:2px}
+    .cust-scroll::-webkit-scrollbar-thumb{background:var(--border)}
+    .cust-row{display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid rgba(0,0,0,.04)}
+    .cust-row:last-child{border-bottom:none}
+    .cust-av{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--green),var(--green2));display:flex;align-items:center;justify-content:center;font-size:.62rem;font-weight:800;color:#fff;flex-shrink:0}
+    .cust-name{font-size:.76rem;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .cust-count{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--orange)}
+    .cust-time{font-family:'JetBrains Mono',monospace;font-size:.54rem;color:var(--muted)}
+    .no-cust{padding:20px;text-align:center;color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:.7rem}
+
+    /* ── BUTTONS ── */
+    .act-btn{padding:5px 13px;border-radius:7px;font-family:'Barlow Condensed',sans-serif;font-size:.78rem;font-weight:700;cursor:pointer;letter-spacing:.5px;transition:all .15s;border:1px solid;white-space:nowrap}
+    .act-btn.orange{background:rgba(249,115,22,.1);border-color:rgba(249,115,22,.3);color:var(--orange)}
+    .act-btn.orange:hover{background:rgba(249,115,22,.2)}
+    .act-btn.green{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.3);color:var(--green)}
+    .act-btn.green:hover{background:rgba(34,197,94,.2)}
+    .status-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+    /* ── PAYMENT OVERLAY ── */
+    .pay-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);backdrop-filter:blur(6px);z-index:100;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s}
+    .pay-overlay.open{opacity:1;pointer-events:all}
+    .pay-box{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:32px;width:380px;text-align:center;animation:popUp .3s cubic-bezier(.34,1.56,.64,1)}
+    @keyframes popUp{from{opacity:0;transform:scale(.88) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    .pay-icon{font-size:2.8rem;margin-bottom:12px}
+    .pay-title{font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;font-weight:900;letter-spacing:1px;margin-bottom:6px}
+    .pay-amount{font-family:'JetBrains Mono',monospace;font-size:1.8rem;color:var(--green);font-weight:700;margin-bottom:8px}
+    .pay-subtitle{font-size:.78rem;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:20px;line-height:1.7}
+    .pay-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
+    .pay-btn{padding:11px;border:none;border-radius:10px;font-family:'Barlow Condensed',sans-serif;font-size:.95rem;font-weight:800;letter-spacing:1px;cursor:pointer;transition:all .15s}
+    .pay-btn.cancel{background:rgba(239,68,68,.12);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+    .pay-btn.cancel:hover{background:rgba(239,68,68,.22)}
+    .pay-btn.confirm{background:var(--green);color:#fff}
+    .pay-btn.confirm:hover{background:var(--green2)}
+    .pay-btn:disabled{opacity:.4;cursor:not-allowed}
+    .rfid-hint-box{background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.2);border-radius:10px;padding:14px;margin-bottom:14px;font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--green);animation:pulse 1.8s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:.7}50%{opacity:1}}
+    /* card info inside overlay */
+    .card-info-box{background:var(--subtle);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px;text-align:left}
+    .cib-name{font-family:'Barlow Condensed',sans-serif;font-size:1.2rem;font-weight:900}
+    .cib-rfid{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--orange);margin:2px 0 8px}
+    .cib-bal{font-family:'JetBrains Mono',monospace;font-size:.95rem;color:var(--green)}
+    .cib-bal span{font-size:.55rem;color:var(--muted);display:block}
+
+    /* ── ADD ITEM MODAL ── */
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+    .modal-overlay.open{opacity:1;pointer-events:all}
+    .modal{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;width:340px}
+    .modal h3{font-family:'Barlow Condensed',sans-serif;font-size:1rem;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--orange);margin-bottom:14px}
+    .fg{margin-bottom:12px}
+    .fg label{display:block;font-family:'JetBrains Mono',monospace;font-size:.56rem;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
+    .fg input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.78rem;outline:none;transition:border-color .2s}
+    .fg input:focus{border-color:var(--orange)}
+    .modal-actions{display:flex;gap:7px;margin-top:14px}
+    .mbtn{flex:1;padding:9px;border:none;border-radius:8px;font-family:'Barlow Condensed',sans-serif;font-size:.88rem;font-weight:800;letter-spacing:1px;cursor:pointer;transition:all .15s}
+    .mbtn.primary{background:var(--orange);color:#fff}
+    .mbtn.primary:hover{background:var(--orange2)}
+    .mbtn.outline{background:none;border:1px solid var(--border);color:var(--muted)}
+    .mbtn.outline:hover{border-color:var(--orange);color:var(--orange)}
+
+    /* ── TOAST ── */
+    .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-family:'JetBrains Mono',monospace;font-size:.74rem;color:var(--text);z-index:999;opacity:0;transform:translateY(10px);transition:all .25s;max-width:300px}
+    .toast.show{opacity:1;transform:translateY(0)}
+    .toast.err{border-color:rgba(239,68,68,.5);color:var(--red)}
+    .toast.ok{border-color:rgba(34,197,94,.4);color:var(--green)}
+  </style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ══════ LEFT PANEL ══════ -->
+  <div class="left-panel">
+    <div class="logo-bar">
+      <h1>INSTA<span>PAY</span></h1>
+      <p>Merchant POS Terminal</p>
+    </div>
+
+    <!-- Stall selector -->
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:.54rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Active Stall</div>
+      <div class="stall-bar" id="stall-bar">
+        <button class="stall-btn active" data-key="A" onclick="selectStall('A',this)">A · Stall 1</button>
+      </div>
+    </div>
+
+    <!-- LCD mirror -->
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:.54rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">LCD Screen</div>
+      <div class="lcd-wrap">
+        <div class="lcd-line1" id="lcd1">Welcome to <span id="lcd-stall-name">Stall 1</span></div>
+        <div class="lcd-line2" id="lcd2">Press A to open menu<span class="lcd-cursor"></span></div>
+      </div>
+    </div>
+
+    <!-- Arduino status -->
+    <div class="ard-status-bar">
+      <div class="ard-dot" id="ard-dot"></div>
+      <span class="ard-label" id="ard-label">Checking Arduino…</span>
+    </div>
+
+    <!-- RFID card info — shown when customer taps -->
+    <div class="rfid-card" id="rfid-card">
+      <div class="rfid-card-title">📡 Card Detected</div>
+      <div class="rfid-name" id="rfid-card-name">—</div>
+      <div class="rfid-uid"  id="rfid-card-uid">—</div>
+      <div class="rfid-bal">
+        <span>Balance</span>
+        <span id="rfid-card-bal">₱ 0.00</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══════ RIGHT PANEL ══════ -->
+  <div class="right-panel">
+
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('pos',this)">🖥 POS Terminal</button>
+      <button class="tab-btn" onclick="switchTab('history',this)">📊 Sales History</button>
+    </div>
+
+    <div class="tab-content">
+
+      <!-- ══ POS TAB ══ -->
+      <div class="tab-pane active" id="tab-pos">
+        <div class="topbar">
+          <div class="topbar-left">
+            <h2 id="panel-title">Stall 1 — POS</h2>
+            <p id="panel-sub" style="font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--muted)">Waiting for Arduino input…</p>
+          </div>
+          <div class="status-row">
+            <span class="tag" id="order-status-tag" style="display:none"></span>
+            <button class="act-btn orange" onclick="openAddItem()">+ Add Menu Item</button>
+          </div>
+        </div>
+
+        <!-- Menu items only — no order panel -->
+        <div class="menu-panel">
+          <div class="sec-title">Menu</div>
+          <div class="menu-grid" id="menu-grid">
+            <div style="color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:.72rem;padding:10px 0">Loading menu…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ SALES HISTORY TAB ══ -->
+      <div class="tab-pane" id="tab-history">
+
+        <div class="hist-topbar">
+          <div>
+            <h2>Sales History — <span id="hist-stall-label">Stall 1</span></h2>
+            <p style="font-family:'JetBrains Mono',monospace;font-size:.58rem;color:var(--muted);margin-top:2px">Completed orders from backend</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="act-btn green" onclick="refreshHistory()">↺ Refresh</button>
+            <button class="act-btn orange" onclick="downloadAuditPDF()">↓ PDF Audit</button>
+          </div>
+        </div>
+
+        <div class="hist-stats">
+          <div class="hstat">
+            <div class="hstat-label">Total Orders</div>
+            <div class="hstat-val orange" id="hist-orders">0</div>
+          </div>
+          <div class="hstat">
+            <div class="hstat-label">Total Revenue</div>
+            <div class="hstat-val green" id="hist-revenue">₱0.00</div>
+          </div>
+          <div class="hstat">
+            <div class="hstat-label">Unique Customers</div>
+            <div class="hstat-val" id="hist-unique">0</div>
+          </div>
+        </div>
+
+        <div class="hist-split">
+          <div class="sales-section">
+            <div class="sales-header">
+              <h3>Order Log</h3>
+              <div class="search-wrap">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke-width="2"/><path stroke-linecap="round" stroke-width="2" d="M21 21l-4.35-4.35"/></svg>
+                <input type="text" id="hist-search" placeholder="Search order or name…" oninput="filterHistory(this.value)"/>
+              </div>
+            </div>
+            <div class="sales-scroll">
+              <table>
+                <thead>
+                  <tr><th>Order ID</th><th>Customer</th><th>Amount</th><th>Date &amp; Time</th></tr>
+                </thead>
+                <tbody id="hist-tbody">
+                  <tr><td colspan="4" class="no-rec">Click Refresh to load sales data.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="cust-section">
+            <div class="cust-head">
+              <h3>👤 Customers</h3>
+              <p>Who paid at this stall</p>
+            </div>
+            <div class="cust-scroll" id="cust-list">
+              <div class="no-cust">No customers yet.</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ══ PAYMENT OVERLAY ══ -->
+<div class="pay-overlay" id="pay-overlay">
+  <div class="pay-box">
+    <div class="pay-icon" id="pay-icon">💳</div>
+    <div class="pay-title" id="pay-title">Total Payment</div>
+    <div class="pay-amount" id="pay-amount">₱ 0.00</div>
+
+    <!-- Waiting for card tap -->
+    <div class="rfid-hint-box" id="rfid-hint-box">
+      📡 Waiting for customer to tap RFID card…
+    </div>
+
+    <!-- Card info (shown after tap) -->
+    <div class="card-info-box" id="card-info-box" style="display:none">
+      <div class="cib-name" id="cib-name">—</div>
+      <div class="cib-rfid" id="cib-rfid">—</div>
+      <div class="cib-bal"><span>Balance</span><span id="cib-bal">₱ 0.00</span></div>
+    </div>
+
+    <div id="pay-actions">
+      <div class="pay-actions">
+        <button class="pay-btn cancel" onclick="payCancel()">✕ Cancel</button>
+        <button class="pay-btn confirm" id="pay-confirm-btn" onclick="payConfirm()" disabled>✓ Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ ADD ITEM MODAL ══ -->
+<div class="modal-overlay" id="add-item-modal">
+  <div class="modal">
+    <h3>+ Add Menu Item</h3>
+    <div class="fg"><label>Item Code (number)</label><input type="number" id="ai-code" min="1" placeholder="e.g. 5"/></div>
+    <div class="fg"><label>Item Name</label><input type="text" id="ai-name" placeholder="e.g. Burger"/></div>
+    <div class="fg"><label>Price (₱)</label><input type="number" id="ai-price" min="1" step="0.01" placeholder="0.00"/></div>
+    <div class="modal-actions">
+      <button class="mbtn outline" onclick="closeAddItem()">Cancel</button>
+      <button class="mbtn primary" onclick="submitAddItem()">Add Item</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════
+   INSTAPAY MERCHANT — Hardware-driven POS
+   All ordering is done via Arduino keypad/RFID.
+   This page is display-only — shows LCD mirror,
+   RFID card info, and sales history.
+════════════════════════════════════════════════════════ */
+
+const API = {
+  async post(url, body) {
+    const r = await fetch(url, {method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    return r.json();
+  },
+  async get(url) {
+    const r = await fetch(url, {credentials:'include'});
+    return r.json();
+  },
+  async del(url) {
+    const r = await fetch(url, {method:'DELETE', credentials:'include'});
+    return r.json();
+  }
+};
+
+// ── STATE ────────────────────────────────────
+let _stall     = 'A';
+let _stallName = 'Stall 1';
+let _menu      = [];
+let _orderId   = null;
+let _rfidPollInt = null;
+let _scannedRfid = null;
+let _orderTotal  = 0;
+
+// ── TAB SWITCHING ─────────────────────────────
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  if (tab === 'history') {
+    document.getElementById('hist-stall-label').textContent = _stallName;
+    refreshHistory();
+  }
+}
+
+// ── LCD ──────────────────────────────────────
+function lcd(l1, l2) {
+  document.getElementById('lcd1').innerHTML = l1 || '';
+  document.getElementById('lcd2').innerHTML = l2 !== undefined ? l2 : '<span class="lcd-cursor"></span>';
+}
+
+// ── STALLS ───────────────────────────────────
+async function loadStalls() {
+  const res = await API.get('/api/merchant/stalls');
+  if (!res.ok) return;
+  const bar = document.getElementById('stall-bar');
+  bar.innerHTML = '';
+  res.stalls.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className   = 'stall-btn' + (i === 0 ? ' active' : '');
+    b.dataset.key = s.stall_key;
+    b.textContent = `${s.stall_key} · ${s.name}`;
+    b.onclick     = () => { _stallName = s.name; selectStall(s.stall_key, b); };
+    bar.appendChild(b);
+  });
+  if (res.stalls.length) {
+    _stall     = res.stalls[0].stall_key;
+    _stallName = res.stalls[0].name;
+    syncStallLabels();
+    await loadMenu();
+  }
+}
+
+async function selectStall(key, btn) {
+  _stall = key;
+  document.querySelectorAll('.stall-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  syncStallLabels();
+  await loadMenu();
+  document.getElementById('hist-stall-label').textContent = _stallName;
+  lcd(`Welcome to ${_stallName}`, 'Press A to open menu<span class="lcd-cursor"></span>');
+  document.getElementById('panel-sub').textContent = 'Waiting for Arduino input…';
+  hideRfidCard();
+}
+
+function syncStallLabels() {
+  document.getElementById('lcd-stall-name').textContent = _stallName;
+  document.getElementById('panel-title').textContent    = `${_stallName} — POS`;
+}
+
+// ── MENU ─────────────────────────────────────
+async function loadMenu() {
+  const m = await API.get(`/api/merchant/stall/${_stall}/menu`);
+  if (m.ok) { _menu = m.items; renderMenu(); }
+}
+
+function renderMenu() {
+  const g = document.getElementById('menu-grid');
+  if (!_menu.length) {
+    g.innerHTML = '<div style="color:var(--muted);font-family:\'JetBrains Mono\',monospace;font-size:.72rem;padding:10px 0">No items yet. Use + Add Menu Item.</div>';
+    return;
+  }
+  g.innerHTML = _menu.map(it => `
+    <div class="menu-card">
+      <div class="mc-code">Code: ${it.code}</div>
+      <div class="mc-name">${it.name}</div>
+      <div class="mc-price">&#8369;${it.price.toFixed(2)}</div>
+      <button class="mc-del" onclick="deleteItem(${it.id})">&#x2715;</button>
+    </div>`).join('');
+}
+
+// ── RFID CARD INFO (left panel) ───────────────
+function showRfidCard(name, rfid, balance) {
+  document.getElementById('rfid-card-name').textContent = name;
+  document.getElementById('rfid-card-uid').textContent  = rfid;
+  document.getElementById('rfid-card-bal').textContent  = `₱ ${parseFloat(balance).toFixed(2)}`;
+  document.getElementById('rfid-card').classList.add('visible');
+}
+
+function hideRfidCard() {
+  document.getElementById('rfid-card').classList.remove('visible');
+}
+
+// ── ORDER STATUS TAG ──────────────────────────
+function setOrderStatusTag(status) {
+  const tag = document.getElementById('order-status-tag');
+  const map = {
+    open:            ['green',  '● Open'],
+    pending_payment: ['orange', '⏳ Awaiting Payment'],
+    paid:            ['green',  '✓ Paid'],
+    cancelled:       ['red',    '✕ Cancelled']
+  };
+  const [cls, label] = map[status] || ['green', '●'];
+  tag.className = `tag ${cls}`; tag.textContent = label; tag.style.display = '';
+}
+
+// ─────────────────────────────────────────────
+//  ARDUINO POLLING
+//  Polls /api/arduino/stall/<key>/latest every 1.5s.
+//  When a new RFID appears, shows it in the left panel
+//  and opens the payment overlay.
+// ─────────────────────────────────────────────
+let _lastRfidTs = 0;
+
+function startArduinoPolling() {
+  // Replaced by socket.on('rfid_tapped') — no-op kept for compatibility
+}
+
+function onRfidTapped(rfid, user) {
+  _scannedRfid = rfid;
+  const name = user ? user.name    : rfid;
+  const bal  = user ? user.balance : 0;
+
+  // Hide "waiting" hint, show card info
+  document.getElementById('rfid-hint-box').style.display  = 'none';
+  document.getElementById('card-info-box').style.display  = '';
+  document.getElementById('cib-name').textContent = name;
+  document.getElementById('cib-rfid').textContent = rfid;
+  document.getElementById('cib-bal').textContent  = `₱ ${parseFloat(bal).toFixed(2)}`;
+
+  document.getElementById('pay-icon').textContent  = '🔖';
+  document.getElementById('pay-title').textContent = 'Confirm Payment';
+  document.getElementById('pay-confirm-btn').disabled = false;
+
+  lcd(`${name}`, '* Cancel   # Pay');
+  showToast(`📡 Card: ${name}`, false, 'ok');
+}
+
+// ── PAYMENT OVERLAY ──────────────────────────
+function openPaymentOverlay(total, orderId) {
+  _orderId     = orderId;
+  _orderTotal  = total;
+  _scannedRfid = null;
+
+  document.getElementById('pay-amount').innerHTML    = `&#8369;${total.toFixed(2)}`;
+  document.getElementById('pay-icon').textContent    = '💳';
+  document.getElementById('pay-title').textContent   = 'Total Payment';
+  document.getElementById('rfid-hint-box').style.display = '';
+  document.getElementById('rfid-hint-box').innerHTML = '📡 Waiting for customer to tap RFID card…';
+  document.getElementById('card-info-box').style.display = 'none';
+  document.getElementById('pay-confirm-btn').disabled    = true;
+  document.getElementById('pay-actions').innerHTML = `
+    <div class="pay-actions">
+      <button class="pay-btn cancel" onclick="payCancel()">✕ Cancel</button>
+      <button class="pay-btn confirm" id="pay-confirm-btn" onclick="payConfirm()" disabled>✓ Confirm</button>
+    </div>`;
+  document.getElementById('pay-overlay').classList.add('open');
+  lcd(`Total: &#8369;${total.toFixed(2)}`, 'Tap RFID card…');
+  startRfidPoll();
+}
+
+function startRfidPoll() {
+  // Replaced by socket.on('rfid_tapped') — no-op kept for compatibility
+}
+
+function stopRfidPoll() {
+  // No-op — socket.io handles this
+}
+
+async function payConfirm() {
+  if (!_scannedRfid || !_orderId) return;
+  const btn = document.getElementById('pay-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Processing…';
+
+  const res = await API.post(`/api/merchant/order/${_orderId}/pay`, {rfid: _scannedRfid});
+  btn.textContent = '✓ Confirm';
+
+  if (res.ok) {
+    document.getElementById('pay-icon').textContent  = '✅';
+    document.getElementById('pay-title').textContent = 'Payment Successful!';
+    document.getElementById('card-info-box').style.display = 'none';
+    document.getElementById('rfid-hint-box').style.display = '';
+    document.getElementById('rfid-hint-box').style.animation = 'none';
+    document.getElementById('rfid-hint-box').innerHTML =
+      `<strong>${res.user_name}</strong> paid &#8369;${res.total.toFixed(2)}<br>New balance: &#8369;${res.new_balance.toFixed(2)}`;
+    document.getElementById('pay-actions').innerHTML =
+      `<div class="pay-actions"><button class="pay-btn confirm" style="grid-column:span 2" onclick="closePayAndReset()">✓ Done</button></div>`;
+    setOrderStatusTag('paid');
+    lcd('Payment Successful!', `Bal:P${res.new_balance.toFixed(2)}`);
+    showRfidCard(res.user_name, _scannedRfid, res.new_balance);
+    showToast('✅ Payment successful!', false, 'ok');
+
+  } else if (res.error === 'Insufficient balance.') {
+    document.getElementById('pay-icon').textContent          = '💳';
+    document.getElementById('pay-title').textContent         = 'Total Payment';
+    document.getElementById('rfid-hint-box').style.display   = '';
+    document.getElementById('rfid-hint-box').style.animation = '';
+    document.getElementById('rfid-hint-box').innerHTML       = '❌ Insufficient balance — tap another card';
+    document.getElementById('card-info-box').style.display   = 'none';
+    document.getElementById('pay-confirm-btn').disabled = true;
+    _scannedRfid = null;
+    startRfidPoll();
+    lcd('Insuf. balance!', 'Tap another card…');
+    showToast('❌ Insufficient balance.', true);
+
+  } else {
+    showToast(res.error || 'Payment failed.', true);
+    btn.disabled = false;
+  }
+}
+
+function payCancel() {
+  stopRfidPoll();
+  document.getElementById('pay-overlay').classList.remove('open');
+  _scannedRfid = null;
+  lcd(`Total: &#8369;${_orderTotal.toFixed(2)}`, '* Add more   # Pay');
+  showToast('Payment cancelled.');
+}
+
+function closePayAndReset() {
+  stopRfidPoll();
+  document.getElementById('pay-overlay').classList.remove('open');
+  _orderId = null; _scannedRfid = null; _orderTotal = 0;
+  document.getElementById('order-status-tag').style.display = 'none';
+  document.getElementById('panel-sub').textContent = 'Waiting for Arduino input…';
+  lcd(`Welcome to ${_stallName}`, 'Press A to open menu<span class="lcd-cursor"></span>');
+  hideRfidCard();
+}
+
+// ── MENU ITEMS CRUD ───────────────────────────
+function openAddItem() {
+  document.getElementById('add-item-modal').classList.add('open');
+  document.getElementById('ai-code').value = '';
+  document.getElementById('ai-name').value = '';
+  document.getElementById('ai-price').value = '';
+}
+function closeAddItem() { document.getElementById('add-item-modal').classList.remove('open'); }
+
+async function submitAddItem() {
+  const code  = parseInt(document.getElementById('ai-code').value);
+  const name  = document.getElementById('ai-name').value.trim();
+  const price = parseFloat(document.getElementById('ai-price').value);
+  if (!code || !name || !price) { showToast('Fill all fields.', true); return; }
+  const res = await API.post(`/api/merchant/stall/${_stall}/menu/item`, {item_code:code, name, price});
+  if (res.ok) { closeAddItem(); await loadMenu(); showToast('Item added.'); }
+  else showToast(res.error || 'Failed.', true);
+}
+
+async function deleteItem(id) {
+  if (!confirm('Remove this item?')) return;
+  const res = await API.del(`/api/merchant/stall/${_stall}/menu/item/${id}`);
+  if (res.ok) { await loadMenu(); showToast('Item removed.'); }
+}
+
+// ── ARDUINO CONNECTION STATUS ─────────────────
+// Replaced by socket.on('arduino_status') — stub kept for safety
+function checkArduinoStatus() {
+  // No-op — socket.io event handles this instantly
+}
+
+// ═══════════════════════════════════════════════
+// SALES HISTORY
+// ═══════════════════════════════════════════════
+let _salesAll = [], _salesFiltered = [];
+
+async function refreshHistory() {
+  document.getElementById('hist-tbody').innerHTML =
+    '<tr><td colspan="4" class="no-rec">Loading…</td></tr>';
+  document.getElementById('cust-list').innerHTML =
+    '<div class="no-cust">Loading…</div>';
+
+  const res = await API.get(`/api/merchant/stall/${_stall}/sales`);
+  if (!res.ok) {
+    document.getElementById('hist-tbody').innerHTML =
+      '<tr><td colspan="4" class="no-rec">Failed to load.</td></tr>';
+    showToast('Failed to load sales.', true);
+    return;
+  }
+  _salesAll = res.sales;
+  _salesFiltered = [..._salesAll];
+  document.getElementById('hist-orders').textContent  = res.total_orders;
+  document.getElementById('hist-revenue').innerHTML   = `&#8369;${res.total_revenue.toFixed(2)}`;
+  document.getElementById('hist-unique').textContent  = res.unique_customers;
+  renderSalesTable(_salesFiltered);
+  renderCustomers(_salesAll);
+}
+
+function filterHistory(q) {
+  const lq = q.toLowerCase();
+  _salesFiltered = _salesAll.filter(s =>
+    s.id.toLowerCase().includes(lq) ||
+    (s.customer_name && s.customer_name.toLowerCase().includes(lq))
+  );
+  renderSalesTable(_salesFiltered);
+}
+
+function renderSalesTable(data) {
+  const tbody = document.getElementById('hist-tbody');
+  if (!data.length) { tbody.innerHTML = '<tr><td colspan="4" class="no-rec">No records found.</td></tr>'; return; }
+  tbody.innerHTML = data.map(s => `
+    <tr>
+      <td class="mono" style="color:var(--muted)">${s.id}</td>
+      <td><strong>${s.customer_name}</strong></td>
+      <td class="mono" style="color:var(--green)">&#8369;${s.total.toFixed(2)}</td>
+      <td class="mono" style="color:var(--muted)">${s.paid_at}</td>
+    </tr>`).join('');
+}
+
+function renderCustomers(data) {
+  const el = document.getElementById('cust-list');
+  const map = {};
+  data.forEach(s => {
+    const n = s.customer_name || 'Guest';
+    if (!map[n]) map[n] = {count:0, last:s.paid_at};
+    map[n].count++;
+    if (s.paid_at > map[n].last) map[n].last = s.paid_at;
+  });
+  const sorted = Object.entries(map).sort((a,b) => b[1].count - a[1].count);
+  if (!sorted.length) { el.innerHTML = '<div class="no-cust">No customers yet.</div>'; return; }
+  el.innerHTML = sorted.map(([name, info]) => `
+    <div class="cust-row">
+      <div class="cust-av">${name.charAt(0).toUpperCase()}</div>
+      <div style="flex:1;overflow:hidden">
+        <div class="cust-name">${name}</div>
+        <div class="cust-time">${info.last}</div>
+      </div>
+      <div class="cust-count">${info.count}×</div>
+    </div>`).join('');
+}
+
+// ── PDF AUDIT ─────────────────────────────────
+function downloadAuditPDF() {
+  const { jsPDF } = window.jspdf;
+  if (!_salesAll.length) { showToast('No data to export.', true); return; }
+  const doc = new jsPDF(), W = doc.internal.pageSize.getWidth();
+  const now = new Date().toLocaleString();
+
+  doc.setFillColor(6,10,6); doc.rect(0,0,W,40,'F');
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(24); doc.setTextColor(249,115,22); doc.text('INSTAPAY',14,16);
+  doc.setFontSize(9); doc.setTextColor(180,180,180); doc.text('Merchant Sales Audit Report',14,23);
+  doc.setFontSize(7.5); doc.setTextColor(120,120,120);
+  doc.text(`Stall: ${_stallName}`,14,30);
+  doc.text(`Generated: ${now}`,14,36);
+  doc.text('CONFIDENTIAL',W-14,36,{align:'right'});
+
+  const totalRev = _salesAll.reduce((s,o) => s+o.total, 0);
+  const uniq     = new Set(_salesAll.map(o => o.customer_name)).size;
+  doc.setFillColor(16,22,16); doc.roundedRect(14,46,W-28,28,3,3,'F');
+  const cols = (W-28)/3;
+  [['Total Orders',String(_salesAll.length),[249,115,22]],
+   ['Total Revenue',`P${totalRev.toFixed(2)}`,[34,197,94]],
+   ['Unique Customers',String(uniq),[200,200,200]]].forEach(([lbl,val,col],i) => {
+    const x = 20+i*cols;
+    doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(100,140,100); doc.text(lbl,x,56);
+    doc.setFont('helvetica','bold');  doc.setFontSize(14); doc.setTextColor(...col); doc.text(val,x,66);
+  });
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(200,200,200); doc.text('Order Log',14,84);
+  doc.autoTable({
+    startY:87,
+    head:[['Order ID','Customer','Amount (₱)','Date & Time']],
+    body:_salesAll.map(s=>[s.id,s.customer_name,`P${s.total.toFixed(2)}`,s.paid_at]),
+    theme:'grid',
+    styles:{font:'helvetica',fontSize:7.5,cellPadding:3,textColor:[215,215,215],fillColor:[19,26,19],lineColor:[30,42,30],lineWidth:.3},
+    headStyles:{fillColor:[10,18,10],textColor:[249,115,22],fontStyle:'bold',fontSize:7},
+    alternateRowStyles:{fillColor:[14,20,14]},
+    columnStyles:{0:{cellWidth:52,textColor:[100,130,100]},1:{cellWidth:50},2:{cellWidth:30,textColor:[34,197,94]},3:{cellWidth:40}},
+    margin:{left:14,right:14}
+  });
+
+  const pages = doc.internal.getNumberOfPages();
+  for (let i=1;i<=pages;i++) {
+    doc.setPage(i);
+    const fY = doc.internal.pageSize.getHeight()-8;
+    doc.setDrawColor(30,42,30); doc.line(14,fY-3,W-14,fY-3);
+    doc.setFont('helvetica','normal'); doc.setFontSize(6.5); doc.setTextColor(70,100,70);
+    doc.text('InstaPay — Official Merchant Audit.',14,fY);
+    doc.text(`Page ${i} of ${pages}`,W-14,fY,{align:'right'});
+  }
+  doc.save(`instapay-audit-${_stall}-${new Date().toISOString().slice(0,10)}.pdf`);
+  showToast('📄 PDF downloaded!', false, 'ok');
+}
+
+// ── TOAST ─────────────────────────────────────
+function showToast(msg, isErr=false, type='') {
+  const t = document.getElementById('toast');
+  t.innerHTML = msg;
+  t.className = 'toast' + (isErr?' err':type==='ok'?' ok':'');
+  setTimeout(()=>t.classList.add('show'),10);
+  setTimeout(()=>t.classList.remove('show'),2800);
+}
+
+// ── INIT ──────────────────────────────────────
+loadStalls();
+
+// ════ SOCKET.IO REAL-TIME ════
+// Replaces startArduinoPolling() and setInterval(checkArduinoStatus).
+// All RFID taps, payment results, and order updates arrive instantly.
+const socket = io({ transports: ['websocket', 'polling'] });
+
+socket.on('connect', () => {
+  // Join the room for the current stall
+  socket.emit('join_stall', { stall: _stall });
+});
+
+// Re-join stall room whenever stall changes
+const _origSelectStall = selectStall;
+selectStall = async function(key, btn) {
+  await _origSelectStall.call(this, key, btn);
+  socket.emit('join_stall', { stall: key });
+};
+
+// Arduino connection status — instant, no polling
+socket.on('arduino_status', (data) => {
+  const dot = document.getElementById('ard-dot');
+  const lbl = document.getElementById('ard-label');
+  if (data.connected) {
+    dot.classList.add('on');
+    lbl.textContent = 'Arduino connected';
+    lbl.style.color = '#22c55e';
+  } else {
+    dot.classList.remove('on');
+    lbl.textContent = 'Arduino not connected';
+    lbl.style.color = 'var(--muted)';
+  }
+});
+
+// RFID card tapped — replaces startArduinoPolling + startRfidPoll
+socket.on('rfid_tapped', (data) => {
+  if (data.stall !== _stall && data.stall !== 'admin') return;
+  _scannedRfid = data.rfid;
+  const name = data.user ? data.user.name    : data.rfid;
+  const bal  = data.user ? data.user.balance : 0;
+
+  // Always update left panel
+  showRfidCard(name, data.rfid, bal);
+  lcd(name, 'Balance: ₱' + parseFloat(bal).toFixed(2));
+
+  // If payment overlay is open, fill in card details instantly
+  if (document.getElementById('pay-overlay').classList.contains('open')) {
+    onRfidTapped(data.rfid, data.user);
+  }
+  showToast('📡 Card: ' + name, false, 'ok');
+});
+
+// Real-time order update from Arduino ADDITEM
+socket.on('order_updated', (data) => {
+  if (data.stall !== _stall) return;
+  _orderId    = data.order_id;
+  _orderTotal = data.total;
+  setOrderStatusTag(data.status);
+  if (data.last_item) {
+    document.getElementById('panel-sub').textContent =
+      'Last added: ' + data.last_item + ' ₱' + data.last_price.toFixed(2) +
+      ' | Total: ₱' + data.total.toFixed(2);
+    lcd('Added: ' + data.last_item, 'Total: ₱' + data.total.toFixed(2));
+    showToast('+ ' + data.last_item + ' added to order');
+  }
+  if (data.status === 'pending_payment') {
+    lcd('Total: ₱' + data.total.toFixed(2), 'Tap RFID card…');
+    openPaymentOverlay(data.total, data.order_id);
+  }
+  if (data.status === 'cancelled') {
+    closePayAndReset();
+    showToast('Order cancelled.');
+  }
+});
+
+// Payment result from Arduino CONFIRMPAY
+socket.on('payment_success', (data) => {
+  if (data.stall !== _stall) return;
+  // Update the overlay with success state
+  document.getElementById('pay-icon').textContent  = '✅';
+  document.getElementById('pay-title').textContent = 'Payment Successful!';
+  document.getElementById('card-info-box').style.display  = 'none';
+  document.getElementById('rfid-hint-box').style.display  = '';
+  document.getElementById('rfid-hint-box').style.animation = 'none';
+  document.getElementById('rfid-hint-box').innerHTML =
+    '<strong>' + data.user_name + '</strong> paid ₱' + data.total.toFixed(2) +
+    '<br>New balance: ₱' + data.new_balance.toFixed(2);
+  document.getElementById('pay-actions').innerHTML =
+    '<div class="pay-actions"><button class="pay-btn confirm" style="grid-column:span 2" onclick="closePayAndReset()">✓ Done</button></div>';
+  setOrderStatusTag('paid');
+  lcd('Payment Successful!', 'Bal:P' + data.new_balance.toFixed(2));
+  showRfidCard(data.user_name, data.rfid, data.new_balance);
+  showToast('✅ Payment successful! ₱' + data.total.toFixed(2), false, 'ok');
+  if (document.getElementById('tab-history').classList.contains('active')) {
+    refreshHistory();
+  }
+});
+
+socket.on('payment_fail', (data) => {
+  if (data.stall !== _stall) return;
+  const msgs = {
+    INSUFFICIENT: '❌ Insufficient balance — tap another card',
+    NOTFOUND:     '❌ Card not registered — tap a different card',
+    NOORDER:      '❌ No active order found',
+    ERROR:        '❌ Payment error — try again',
+  };
+  const msg = msgs[data.reason] || '❌ Payment failed';
+  document.getElementById('rfid-hint-box').style.display   = '';
+  document.getElementById('rfid-hint-box').style.animation = '';
+  document.getElementById('rfid-hint-box').innerHTML       = msg;
+  document.getElementById('card-info-box').style.display   = 'none';
+  document.getElementById('pay-confirm-btn').disabled = true;
+  _scannedRfid = null;
+  lcd('Payment Failed!', data.reason || 'Try again');
+  showToast(msg, true);
+});
+</script>
+</body>
+</html>
