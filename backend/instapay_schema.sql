@@ -1,9 +1,23 @@
 -- ============================================================
---  InstaPay — MySQL Schema  (FINAL v8 — React Native Edition)
---  Changes from v7:
---    • password_hash REMOVED — system uses biometric + PIN only
---    • theme / accent columns gone (already removed in v7)
---    • Migration block handles existing v5/v6/v7 databases
+--  InstaPay — MySQL Schema  (FINAL v5)
+--  Run this ONCE in MySQL Workbench before starting the app.
+--
+--  Steps:
+--    1. File > Open SQL Script → select this file
+--    2. Click the lightning bolt (Execute All)
+--
+--  Physical RFID card UIDs (decimal NN-NNNN-NNNNNN format):
+--    White card : 11-9220-357300
+--    Blue tag   : 09-2401-082000
+--
+--  Default password for both accounts: password123
+--  Starting balance: P0.00  → top up via admin dashboard
+--
+--  Admin login:  http://localhost:5000/admin
+--    username: admin  |  password: admin123
+--
+--  User login:   http://localhost:5000/
+--    RFID: 11-9220-357300  |  password: password123
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS instapay
@@ -13,85 +27,22 @@ CREATE DATABASE IF NOT EXISTS instapay
 USE instapay;
 
 -- ─────────────────────────────────────────────────────────────
--- USERS  (password_hash removed — biometric + PIN only)
+-- USERS
 -- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
-  id              INT UNSIGNED   NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  id              VARCHAR(30)    NOT NULL PRIMARY KEY,
   name            VARCHAR(100)   NOT NULL,
   rfid            VARCHAR(20)    NOT NULL UNIQUE,
   contact         VARCHAR(20)    NOT NULL DEFAULT '',
   status          ENUM('Student','Non-Student') NOT NULL DEFAULT 'Student',
-  pin_hash        VARCHAR(64)    NOT NULL DEFAULT '',
-  bio_token       TEXT                    DEFAULT NULL,
+  password_hash   VARCHAR(64)    NOT NULL,
   balance         DECIMAL(10,2)  NOT NULL DEFAULT 0.00,
   total_refills   INT UNSIGNED   NOT NULL DEFAULT 0,
   last_activity   VARCHAR(20)    NOT NULL DEFAULT '—',
+  theme           VARCHAR(20)    NOT NULL DEFAULT 'midnight',
+  accent          VARCHAR(20)    NOT NULL DEFAULT 'orange',
   created_at      TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
-
--- ─────────────────────────────────────────────────────────────
--- MIGRATION GUARD  (safe upgrade from any previous version)
--- ─────────────────────────────────────────────────────────────
-DROP PROCEDURE IF EXISTS instapay_upgrade;
-DELIMITER //
-CREATE PROCEDURE instapay_upgrade()
-BEGIN
-  DECLARE col_type VARCHAR(100);
-
-  -- Migrate id column from VARCHAR to INT AUTO_INCREMENT if needed
-  SELECT DATA_TYPE INTO col_type
-  FROM information_schema.COLUMNS
-  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'id';
-
-  IF col_type = 'varchar' THEN
-    -- Drop primary key first, then alter column
-    ALTER TABLE users DROP PRIMARY KEY;
-    ALTER TABLE users MODIFY COLUMN id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY;
-  END IF;
-
-  -- Add pin_hash if missing
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'pin_hash'
-  ) THEN
-    ALTER TABLE users ADD COLUMN pin_hash VARCHAR(64) NOT NULL DEFAULT '' AFTER status;
-  END IF;
-
-  -- Add bio_token if missing
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'bio_token'
-  ) THEN
-    ALTER TABLE users ADD COLUMN bio_token TEXT DEFAULT NULL AFTER pin_hash;
-  END IF;
-
-  -- Drop password_hash if still present
-  IF EXISTS (
-    SELECT 1 FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'password_hash'
-  ) THEN
-    ALTER TABLE users DROP COLUMN password_hash;
-  END IF;
-
-  -- Drop theme if still present
-  IF EXISTS (
-    SELECT 1 FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'theme'
-  ) THEN
-    ALTER TABLE users DROP COLUMN theme;
-  END IF;
-
-  -- Drop accent if still present
-  IF EXISTS (
-    SELECT 1 FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'accent'
-  ) THEN
-    ALTER TABLE users DROP COLUMN accent;
-  END IF;
-END //
-DELIMITER ;
-CALL instapay_upgrade();
-DROP PROCEDURE IF EXISTS instapay_upgrade;
 
 -- ─────────────────────────────────────────────────────────────
 -- STALLS
@@ -126,7 +77,8 @@ CREATE TABLE IF NOT EXISTS order_sessions (
   id              VARCHAR(40)   NOT NULL PRIMARY KEY,
   stall_id        INT UNSIGNED  NOT NULL,
   user_rfid       VARCHAR(20)            DEFAULT NULL,
-  status          ENUM('open','pending_payment','paid','cancelled') NOT NULL DEFAULT 'open',
+  status          ENUM('open','pending_payment','paid','cancelled')
+                                NOT NULL DEFAULT 'open',
   total_amount    DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   transaction_id  VARCHAR(40)            DEFAULT NULL,
   paid_at         VARCHAR(20)            DEFAULT NULL,
@@ -236,33 +188,30 @@ INSERT IGNORE INTO menu_items (stall_id, item_code, name, price)
   SELECT id, 4, 'Sundae',  45.00 FROM stalls WHERE stall_key='A';
 
 -- ─────────────────────────────────────────────────────────────
--- SEED: Physical RFID cards  (id is AUTO_INCREMENT — assigned automatically)
--- DEFAULT PIN: 1234
--- SHA-256('1234') = 03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4
+-- SEED: Physical RFID cards
+--
+--   White card : 11-9220-357300
+--   Blue tag   : 09-2401-082000
+--
+--   password_hash = SHA-256('password123')
+--   = ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f
+--
+--   Balance starts at P0.00 — top up via Admin Dashboard.
+--   To log in: RFID = 11-9220-357300, password = password123
 -- ─────────────────────────────────────────────────────────────
 INSERT IGNORE INTO users
-  (name, rfid, contact, status, pin_hash, bio_token, balance, total_refills, last_activity)
+  (id, name, rfid, contact, status, password_hash,
+   balance, total_refills, last_activity, theme, accent)
 VALUES
-  (
-    'White Card User', '11-9220-357300', '09000000001', 'Student',
-    '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4',
-    NULL, 0.00, 0, '—'
-  ),
-  (
-    'Blue Tag User', '09-2401-082000', '09000000002', 'Student',
-    '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4',
-    NULL, 0.00, 0, '—'
-  );
+  ('U-WHITE-CARD', 'White Card User', '11-9220-357300', '09000000001', 'Student',
+   'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f',
+   1000.00, 0, '—', 'midnight', 'orange'),
+  ('U-BLUE-TAG',   'Blue Tag User',   '09-2401-082000', '09000000002', 'Student',
+   'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f',
+   1000.00, 0, '—', 'midnight', 'orange');
 
 -- ─────────────────────────────────────────────────────────────
 -- VERIFY
 -- ─────────────────────────────────────────────────────────────
 SHOW TABLES;
-SELECT
-  name,
-  rfid                                                    AS rfid_card,
-  CONCAT('P', FORMAT(balance, 2))                         AS balance,
-  IF(pin_hash  != '', 'SET (default: 1234)', 'NOT SET')   AS pin_status,
-  IF(bio_token IS NOT NULL, 'ENROLLED',
-     'PENDING — user must Sign Up in the app first')      AS fingerprint_status
-FROM users;
+SELECT id, name, rfid, balance FROM users;
